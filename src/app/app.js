@@ -352,9 +352,13 @@ state.requests = []; state.fields = [];
 $("reqName").addEventListener("input", syncUi);
 $("reqForm").addEventListener("submit", (e) => {
   e.preventDefault();
+  if (state.placing?.kind === "req") return setPlacing(false);
   const label = $("reqName").value.trim();
-  if (!label) return;
-  if (state.placing?.kind === "req") setPlacing(false); else setPlacing(true, "req", label);
+  const hint = $("reqHint");
+  if (state.file?.type !== "pdf") { hint.textContent = "Open a PDF first, then add the boxes to it."; hint.hidden = false; return; }
+  if (!label) { hint.textContent = "Type the name of the person who should sign."; hint.hidden = false; $("reqName").focus(); return; }
+  hint.hidden = true;
+  setPlacing(true, "req", label);
 });
 
 function placeRequest(e, p, label) {
@@ -690,7 +694,7 @@ function syncUi() {
   $("downloadBtn").textContent = state.requests.length && !n ? "Download for signing" : "Download signed";
   $("placeHint").hidden = n > 0;
   $("reqCard").hidden = state.file?.type === "image";
-  $("reqAdd").disabled = state.file?.type !== "pdf" || (!$("reqName").value.trim() && state.placing?.kind !== "req");
+  if ($("reqName").value.trim() && state.file?.type === "pdf") $("reqHint").hidden = true;
 }
 
 /* ---------- boot ---------- */

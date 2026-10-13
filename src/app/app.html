@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Documents never leave the page: no outside connections of any kind are allowed. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<link rel="icon" href="icons/icon-32.png">
+<title>Ink Sign</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="icons/icon-48.png" alt="" width="22" height="22">Ink Sign</div>
+  <div class="file" id="fileName">No file open</div>
+  <div class="bar-actions">
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button type="button" id="zoomOut" title="Zoom out" disabled>−</button>
+      <span id="zoomLabel">100%</span>
+      <button type="button" id="zoomIn" title="Zoom in" disabled>+</button>
+    </div>
+    <button type="button" id="openBtn">Open file</button>
+    <button type="button" id="downloadBtn" class="primary" disabled>Download signed</button>
+  </div>
+  <input type="file" id="fileInput" accept="application/pdf,image/png,image/jpeg,image/webp" hidden>
+</header>
+
+<div class="layout">
+  <main id="viewer" class="viewer">
+    <div class="drop" id="dropzone">
+      <div class="drop-inner">
+        <p class="drop-title">Drop a PDF or image here</p>
+        <p class="drop-sub">PDF, PNG, JPEG or WebP. Files stay on this computer.</p>
+        <button type="button" id="openBtn2" class="primary">Open file</button>
+      </div>
+    </div>
+    <div id="pages" class="pages" hidden></div>
+  </main>
+
+  <aside class="side">
+    <section class="card">
+      <h2>Your signature</h2>
+      <div class="sig-preview" id="sigPreview">
+        <svg id="sigSvg" hidden></svg>
+        <p class="muted" id="sigEmpty">No signature yet.</p>
+      </div>
+      <div class="row">
+        <button type="button" id="drawBtn">Draw signature</button>
+        <button type="button" id="placeBtn" class="primary" disabled>Place on page</button>
+      </div>
+      <p class="muted small" id="placeHint">Draw a signature, then click <b>Place on page</b> and click where it should go. Drag to move, drag the corner to resize.</p>
+      <div class="row placed-row" id="placedRow" hidden>
+        <span id="placedCount"></span>
+        <button type="button" id="clearPlaced" class="link">Remove all</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Digital ID</h2>
+      <div id="idNone">
+        <p class="muted small">Adds a cryptographic signature to PDFs, so any later change to the file is detectable. The key is created and kept in this browser.</p>
+        <label class="field"><span>Name</span><input id="idName" type="text" autocomplete="name"></label>
+        <label class="field"><span>Email <i>(optional)</i></span><input id="idEmail" type="email" autocomplete="email"></label>
+        <button type="button" id="idCreate">Create digital ID</button>
+        <p class="small muted">Already have one? <button type="button" class="link" id="idImportOpen">Import a .p12 or .pfx file</button></p>
+      </div>
+      <div id="idSome" hidden>
+        <dl class="id-info">
+          <dt>Name</dt><dd id="idShowName"></dd>
+          <dt>Email</dt><dd id="idShowEmail"></dd>
+          <dt>Expires</dt><dd id="idShowExpires"></dd>
+          <dt>Fingerprint</dt><dd id="idShowFp" class="mono"></dd>
+          <dt>Origin</dt><dd id="idShowSource"></dd>
+        </dl>
+        <label class="check"><input type="checkbox" id="cryptoOn" checked> Sign PDFs digitally on download</label>
+        <label class="field"><span>Reason <i>(optional)</i></span><input id="reason" type="text" placeholder="e.g. I approve this document"></label>
+        <p class="muted small">PDF readers will show the signature as valid but the signer as unverified, because the certificate is self-issued. Recipients can trust it by importing your certificate.</p>
+        <div class="row">
+          <button type="button" id="idExport" title="The public part only. Send it to people who want to trust your signatures.">Export certificate</button>
+          <button type="button" id="idReplace" class="link">Use another ID</button>
+          <button type="button" id="idDelete" class="link danger">Delete ID</button>
+        </div>
+        <div class="confirm" id="idDeleteConfirm" hidden>
+          <p class="small">Delete this digital ID? PDFs you already signed stay valid, but you can't sign with this ID again.</p>
+          <div class="row"><button type="button" id="idDeleteYes" class="danger-btn">Delete</button><button type="button" id="idDeleteNo">Keep</button></div>
+        </div>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<div class="banner" id="banner" hidden>
+  <p id="bannerText"></p>
+  <div class="row"><button type="button" id="bannerYes" class="primary">Continue</button><button type="button" id="bannerNo">Cancel</button></div>
+</div>
+
+<dialog id="backupDialog" class="dlg" aria-labelledby="bkTitle">
+  <form method="dialog" id="bkStep1" class="dlg-body">
+    <h2 id="bkTitle">Save a backup of your digital ID</h2>
+    <p>Your digital ID is ready. Save a backup file before you use it. The file is the only way to:</p>
+    <ul>
+      <li>use this ID on another computer or in another browser</li>
+      <li>get it back if this browser's data is ever cleared</li>
+      <li>sign with the same ID in Adobe Acrobat or other PDF apps</li>
+    </ul>
+    <label class="field"><span>Password for the file</span><input type="password" id="bkPw" autocomplete="new-password"></label>
+    <label class="field"><span>Repeat password</span><input type="password" id="bkPw2" autocomplete="new-password"></label>
+    <label class="check"><input type="checkbox" id="bkShow"> Show password</label>
+    <p class="note">Anyone who has both the file and the password can sign as you. Keep them apart, for example the file in your cloud storage and the password in a password manager.</p>
+    <p class="note warn">This is the only chance to save it. To protect your ID, it can't be copied out of the browser later.</p>
+    <p class="error" id="bkError" role="alert" hidden></p>
+    <div class="dlg-foot">
+      <button type="button" id="bkCancel">Cancel</button>
+      <button type="submit" id="bkSave" class="primary">Save backup file</button>
+    </div>
+  </form>
+  <div id="bkStep2" class="dlg-body" hidden>
+    <h2>Check that the file was saved</h2>
+    <p>Look in your downloads for <b id="bkFileName"></b>. Move it somewhere you'll find it again.</p>
+    <p class="note">To restore it later, choose <b>Import a .p12 or .pfx file</b> under Digital ID and enter the same password.</p>
+    <div class="dlg-foot">
+      <button type="button" id="bkAgain">Download again</button>
+      <button type="button" id="bkDone" class="primary">Done, use this ID</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="importDialog" class="dlg" aria-labelledby="imTitle">
+  <form method="dialog" class="dlg-body" id="imForm">
+    <h2 id="imTitle">Import a digital ID</h2>
+    <p>Choose a .p12 or .pfx file: an Ink Sign backup, or an ID from a certificate authority or another program.</p>
+    <p class="note warn" id="imReplace" hidden>This replaces the digital ID you have now. Make sure you have its backup if you'll need it again.</p>
+    <label class="field"><span>File</span><input type="file" id="imFile" accept=".p12,.pfx,application/x-pkcs12"></label>
+    <label class="field"><span>Password</span><input type="password" id="imPw" autocomplete="current-password"></label>
+    <p class="error" id="imError" role="alert" hidden></p>
+    <div class="dlg-foot">
+      <button type="button" id="imCancel">Cancel</button>
+      <button type="submit" id="imGo" class="primary">Import</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="padDialog" aria-labelledby="padTitle">
+  <div class="pad-head">
+    <h2 id="padTitle">Draw your signature</h2>
+    <div class="tools">
+      <div class="tool">
+        <span class="lab" id="lab-preset">Preset</span>
+        <div class="seg" role="radiogroup" aria-labelledby="lab-preset">
+          <input type="radio" name="preset" id="p-pen" value="pen"><label for="p-pen">Ballpoint</label>
+          <input type="radio" name="preset" id="p-felt" value="felt"><label for="p-felt">Felt tip</label>
+          <input type="radio" name="preset" id="p-brush" value="brush"><label for="p-brush">Brush</label>
+          <input type="radio" name="preset" id="p-custom" value="custom"><label for="p-custom">Custom</label>
+        </div>
+      </div>
+      <div class="tool">
+        <span class="lab" id="lab-ink">Ink</span>
+        <div class="seg" role="radiogroup" aria-labelledby="lab-ink">
+          <input type="radio" name="ink" id="ink-black" value="black"><label for="ink-black"><span class="swatch sw-black"></span>Black</label>
+          <input type="radio" name="ink" id="ink-blue" value="blue"><label for="ink-blue"><span class="swatch sw-blue"></span>Blue</label>
+        </div>
+      </div>
+      <div class="row">
+        <button type="button" id="padUndo" title="Undo (Ctrl+Z)">Undo</button>
+        <button type="button" id="padRedo" title="Redo (Ctrl+Shift+Z or Ctrl+Y)">Redo</button>
+        <button type="button" id="padClear">Clear</button>
+      </div>
+    </div>
+  </div>
+  <div class="pad-holder">
+    <div class="baseline"></div>
+    <canvas id="pad" aria-label="Signature drawing area"></canvas>
+  </div>
+  <div class="sliders" id="sliders"></div>
+  <div class="pad-foot">
+    <span class="muted small">Pen pressure is used when available; mouse and touch simulate it from speed.</span>
+    <div class="row">
+      <button type="button" id="padCancel">Cancel</button>
+      <button type="button" id="padSave" class="primary">Save signature</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

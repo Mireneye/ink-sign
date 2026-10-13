@@ -69,6 +69,28 @@ button.active { background: var(--accent-soft); border-color: var(--accent); col
 .placed .del { position: absolute; right: -10px; top: -10px; width: 20px; height: 20px; padding: 0; border-radius: 50%; line-height: 1; font-size: 13px; background: var(--sel); color: #fff; border: 2px solid #fff; display: none; }
 .placed.sel .grip, .placed.sel .del, .placed:hover .grip, .placed:hover .del { display: block; }
 
+.reqbox { position: absolute; touch-action: none; cursor: move; background: rgba(255, 220, 110, 0.32); border: 1.5px dashed #c98a12; border-radius: 3px; display: flex; align-items: flex-end; padding: 3px 6px; }
+.reqbox span { font-size: 11px; color: #6e4b06; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.reqbox.sel { border-style: solid; }
+.reqbox .grip, .reqbox .del { position: absolute; display: none; }
+.reqbox .grip { right: -6px; bottom: -6px; width: 12px; height: 12px; background: #c98a12; border: 2px solid #fff; border-radius: 50%; cursor: nwse-resize; }
+.reqbox .del { right: -10px; top: -10px; width: 20px; height: 20px; padding: 0; border-radius: 50%; font-size: 13px; line-height: 1; background: #c98a12; color: #fff; border: 2px solid #fff; }
+.reqbox:hover .grip, .reqbox:hover .del, .reqbox.sel .grip, .reqbox.sel .del { display: block; }
+.fieldbox { position: absolute; display: grid; place-items: center; background: rgba(255, 220, 110, 0.45); border: 2px solid #d4930f; border-radius: 4px; animation: pulse 1.8s ease-in-out 3; }
+.fieldbox button { font-size: 12px; padding: 4px 10px; background: #8a5a00; color: #fff; border-color: #8a5a00; white-space: nowrap; }
+.fieldbox.filled { background: #fff; border-color: transparent; animation: none; } /* the saved file replaces the yellow box with the ink */
+.fieldbox.filled button { display: none; }
+.placed.fixed { cursor: default; }
+.placed.fixed .grip { display: none !important; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(212, 147, 15, 0.25); } }
+@media (prefers-reduced-motion: reduce) { .fieldbox { animation: none; } }
+.req-add { display: grid; gap: 8px; }
+.req-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.85rem; }
+.req-list li { display: flex; justify-content: space-between; gap: 8px; }
+.card.todo { background: var(--accent-soft); border-radius: 8px; padding: 12px; border: none; }
+.card.todo + .card { border-top: none; padding-top: 0; }
+textarea { font: inherit; font-size: 0.88rem; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); resize: vertical; }
+
 .side { background: var(--surface); border-left: 1px solid var(--line); overflow: auto; padding: 16px; display: grid; gap: 22px; align-content: start; }
 .card { display: grid; gap: 10px; }
 .card + .card { border-top: 1px solid var(--line); padding-top: 18px; }

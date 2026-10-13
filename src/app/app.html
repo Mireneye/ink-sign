@@ -38,6 +38,12 @@
   </main>
 
   <aside class="side">
+    <section class="card todo" id="todoCard" hidden>
+      <h2>Your signature is requested</h2>
+      <p class="small" id="todoText"></p>
+      <button type="button" id="todoNext" class="primary">Go to the box</button>
+    </section>
+
     <section class="card">
       <h2>Your signature</h2>
       <div class="sig-preview" id="sigPreview">
@@ -53,6 +59,16 @@
         <span id="placedCount"></span>
         <button type="button" id="clearPlaced" class="link">Remove all</button>
       </div>
+    </section>
+
+    <section class="card" id="reqCard">
+      <h2>Request signatures</h2>
+      <p class="muted small">Add a box for each person who should sign. They open the file on this site and sign in their box.</p>
+      <form class="req-add" id="reqForm">
+        <label class="field"><span>Signer's name</span><input id="reqName" type="text" placeholder="e.g. Anna Berg" autocomplete="off"></label>
+        <button type="submit" id="reqAdd" disabled>Add "Sign here" box</button>
+      </form>
+      <ul class="req-list" id="reqList"></ul>
     </section>
 
     <section class="card">
@@ -104,7 +120,7 @@
       <li>get it back if this browser's data is ever cleared</li>
       <li>sign with the same ID in Adobe Acrobat or other PDF apps</li>
     </ul>
-    <label class="field"><span>Password for the file</span><input type="password" id="bkPw" autocomplete="new-password"></label>
+    <label class="field"><span>Password for the file <i>(at least 10 characters)</i></span><input type="password" id="bkPw" autocomplete="new-password"></label>
     <label class="field"><span>Repeat password</span><input type="password" id="bkPw2" autocomplete="new-password"></label>
     <label class="check"><input type="checkbox" id="bkShow"> Show password</label>
     <p class="note">Anyone who has both the file and the password can sign as you. Keep them apart, for example the file in your cloud storage and the password in a password manager.</p>
@@ -122,6 +138,19 @@
     <div class="dlg-foot">
       <button type="button" id="bkAgain">Download again</button>
       <button type="button" id="bkDone" class="primary">Done, use this ID</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="shareDialog" class="dlg" aria-labelledby="shTitle">
+  <div class="dlg-body">
+    <h2 id="shTitle">Send it for signing</h2>
+    <p>Email the file you just downloaded to <b id="shWho"></b>, with a message like this:</p>
+    <textarea id="shText" rows="9" readonly></textarea>
+    <p class="note">Ink Sign can't send the email for you, because nothing ever leaves your computer. When they've signed, they send the file back to you.</p>
+    <div class="dlg-foot">
+      <button type="button" id="shCopy">Copy message</button>
+      <button type="button" id="shClose" class="primary">Done</button>
     </div>
   </div>
 </dialog>

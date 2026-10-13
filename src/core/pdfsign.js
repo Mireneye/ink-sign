@@ -10,19 +10,7 @@ const BR_PLACEHOLDER = "**********";
 export function addSignatureField(doc, identity, { reason = "", widget = null, now = new Date() } = {}) {
   const ctx = doc.context;
   const page = widget?.page ?? doc.getPages()[0];
-
-  const byteRange = PDFArray.withContext(ctx);
-  byteRange.push(PDFNumber.of(0));
-  for (let i = 0; i < 3; i++) byteRange.push(PDFName.of(BR_PLACEHOLDER));
-  const sig = {
-    Type: "Sig", Filter: "Adobe.PPKLite", SubFilter: "adbe.pkcs7.detached",
-    ByteRange: byteRange,
-    Contents: PDFHexString.of("0".repeat(SIG_BYTES * 2)),
-    M: PDFString.fromDate(now),
-    Name: PDFString.of(identity.name),
-  };
-  if (reason) sig.Reason = PDFString.of(reason);
-  const sigRef = ctx.register(ctx.obj(sig));
+  const sigRef = makeSigValue(doc, identity, { reason, now });
 
   const acroForm = doc.catalog.getOrCreateAcroForm();
   const taken = new Set(acroForm.getAllFields().map(([f]) => f.getPartialName()));
@@ -41,6 +29,33 @@ export function addSignatureField(doc, identity, { reason = "", widget = null, n
   acroForm.addField(widgetRef);
   acroForm.dict.set(PDFName.of("SigFlags"), PDFNumber.of(3));
   return widgetRef;
+}
+
+// Signs into an existing empty signature field (e.g. one placed by a signature request).
+export function fillSignatureField(doc, identity, fieldName, ap, { reason = "", now = new Date() } = {}) {
+  const field = doc.getForm().getFields().find((f) => f.getName() === fieldName);
+  if (!field) throw new Error(`Signature field "${fieldName}" not found`);
+  field.acroField.dict.set(PDFName.of("V"), makeSigValue(doc, identity, { reason, now }));
+  const widget = field.acroField.getWidgets()[0];
+  widget.dict.set(PDFName.of("AP"), doc.context.obj({ N: ap }));
+  widget.dict.set(PDFName.of("F"), PDFNumber.of(132));
+  doc.catalog.getOrCreateAcroForm().dict.set(PDFName.of("SigFlags"), PDFNumber.of(3));
+}
+
+function makeSigValue(doc, identity, { reason, now }) {
+  const ctx = doc.context;
+  const byteRange = PDFArray.withContext(ctx);
+  byteRange.push(PDFNumber.of(0));
+  for (let i = 0; i < 3; i++) byteRange.push(PDFName.of(BR_PLACEHOLDER));
+  const sig = {
+    Type: "Sig", Filter: "Adobe.PPKLite", SubFilter: "adbe.pkcs7.detached",
+    ByteRange: byteRange,
+    Contents: PDFHexString.of("0".repeat(SIG_BYTES * 2)),
+    M: PDFString.fromDate(now),
+    Name: PDFString.of(identity.name),
+  };
+  if (reason) sig.Reason = PDFString.of(reason);
+  return ctx.register(ctx.obj(sig));
 }
 
 // Whole-file rewrite path (document had no signatures before).

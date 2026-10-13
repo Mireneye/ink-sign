@@ -3,11 +3,9 @@
 // (page content is never edited, so earlier signatures keep validating cleanly).
 import {
   PDFDocument, PDFName, PDFDict, PDFArray, PDFNumber, PDFStream, PDFRef, PDFString,
-  drawSvgPath, pushGraphicsState, popGraphicsState, rgb,
 } from "pdf-lib";
-import { INKS } from "./ink.js";
-import { displaySize, displayToPdf } from "./stamp.js";
-import { addSignatureField, finalize } from "./pdfsign.js";
+import { addSignatureField, fillSignatureField, finalize } from "./pdfsign.js";
+import { buildAppearance, inkOps, fracBox, addRequestFields } from "./request.js";
 
 // null = no certification signature; 1 = no changes allowed; 2 = signing/form fill only; 3 = also annotations.
 export function docMdpLevel(doc) {
@@ -24,9 +22,10 @@ export function docMdpLevel(doc) {
   return 2;
 }
 
-export function canAppend(doc, placements, withId) {
+export function canAppend(doc, placements, withId, requests = []) {
   if (doc.context.trailerInfo.Encrypt) return { ok: false, reason: "This PDF is encrypted, so it can't be modified." };
   const p = docMdpLevel(doc);
+  if (p && requests.length) return { ok: false, reason: "This PDF is certified against changes, so new signature boxes can't be added to it." };
   if (p === 1) return { ok: false, reason: "This PDF is certified to allow no changes, so it can't be signed again." };
   if (p === 2) {
     if (!withId) return { ok: false, reason: "This PDF is certified to allow signing only. Create a digital ID to sign it." };
@@ -35,31 +34,20 @@ export function canAppend(doc, placements, withId) {
   return { ok: true };
 }
 
-// Appearance stream + annotation rectangle for one placement, upright on rotated pages.
-function appearanceFor(doc, page, pl, sig) {
-  const box = page.getCropBox();
-  const rot = page.getRotation().angle;
-  const { w, h } = displaySize(box, rot);
-  const bw = pl.fw * w;
-  const scale = bw / sig.width;
-  const bh = sig.height * scale;
-  const at = displayToPdf(box, rot, pl.fx * w, pl.fy * h);
+// Ink appearance for a free placement: the box is exactly the signature's extent.
+function inkAppearance(doc, page, pl, sig) {
+  const b = fracBox(page, { ...pl, fh: 0 });
+  const scale = b.bw / sig.width;
+  b.bh = sig.height * scale;
+  return buildAppearance(doc, page, b, (bw, bh) => inkOps(sig, 0, bh, scale));
+}
 
-  const ops = [
-    pushGraphicsState(),
-    ...drawSvgPath(sig.path, { x: 0, y: bh, scale, color: rgb(...INKS[sig.ink].rgb), borderColor: undefined, borderWidth: 0 }),
-    popGraphicsState(),
-  ];
-  const t = (at.rotate * Math.PI) / 180, c = Math.round(Math.cos(t)), s = Math.round(Math.sin(t));
-  // Form space (0,bh) is the box's top-left; place it at the anchor after rotating.
-  const corners = [[0, 0], [bw, 0], [0, bh], [bw, bh]].map(([x, y]) => [c * x - s * y, s * x + c * y]);
-  const [tlx, tly] = [c * 0 - s * bh, s * 0 + c * bh];
-  const pts = corners.map(([x, y]) => [x - tlx + at.x, y - tly + at.y]);
-  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-  const rect = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-
-  const form = doc.context.formXObject(ops, { BBox: [0, 0, bw, bh], Matrix: [c, s, -s, c, 0, 0] });
-  return { rect, ap: doc.context.register(form) };
+// Ink appearance for a requested field: the box is the field, the ink sits where it was placed inside it.
+function fieldAppearance(doc, page, pl, sig) {
+  const fb = fracBox(page, pl.fieldBox);
+  const ib = fracBox(page, { ...pl, fh: 0 });
+  const scale = ib.bw / sig.width;
+  return buildAppearance(doc, page, fb, (bw, bh) => inkOps(sig, ib.dx - fb.dx, bh - (ib.dy - fb.dy), scale));
 }
 
 function originalSize(orig) {
@@ -77,9 +65,10 @@ function fingerprintOf(obj) {
   return obj.toString();
 }
 
-export async function appendSigned(orig, placements, sig, identity, { reason = "" } = {}) {
+// placements: { page, fx, fy, fw, field?, fieldBox? }; requests: new empty boxes to add for others.
+export async function appendSigned(orig, placements, sig, identity, { reason = "", requests = [] } = {}) {
   const doc = await PDFDocument.load(orig, { updateMetadata: false });
-  const check = canAppend(doc, placements, !!identity);
+  const check = canAppend(doc, placements.filter((p) => !p.field), !!identity, requests);
   if (!check.ok) throw Object.assign(new Error(check.reason), { userMessage: check.reason });
 
   // pdf-lib doesn't count object-stream and xref-stream numbers; never reuse them.
@@ -87,20 +76,30 @@ export async function appendSigned(orig, placements, sig, identity, { reason = "
   const before = snapshot(doc.context);
   const now = new Date();
   const pages = doc.getPages();
-  let sigWidget = null;
+  // The digital signature goes into a requested field if one was signed, else the first placement.
+  const carrier = identity ? (placements.find((p) => p.field) ?? placements[0] ?? null) : null;
+  let sigWidget = null, filledField = false;
 
-  placements.forEach((pl, i) => {
+  for (const pl of placements) {
     const page = pages[pl.page];
-    if (!page) return;
-    const { rect, ap } = appearanceFor(doc, page, pl, sig);
-    if (identity && i === 0) { sigWidget = { page, rect, ap }; return; }
+    if (!page) continue;
+    if (pl === carrier && pl.field) {
+      const { ap } = fieldAppearance(doc, page, pl, sig);
+      fillSignatureField(doc, identity, pl.field, ap, { reason, now });
+      filledField = true;
+      continue;
+    }
+    const { rect, ap } = inkAppearance(doc, page, pl, sig);
+    if (pl === carrier) { sigWidget = { page, rect, ap }; continue; }
     const ref = doc.context.register(doc.context.obj({
       Type: "Annot", Subtype: "Stamp", Rect: rect, F: 132,
       AP: { N: ap }, P: page.ref, Contents: PDFString.of("Signature"),
     }));
     page.node.addAnnot(ref);
-  });
-  if (identity) addSignatureField(doc, identity, { reason, widget: sigWidget, now });
+  }
+  await addRequestFields(doc, requests);
+  if (identity && !filledField) addSignatureField(doc, identity, { reason, widget: sigWidget, now });
+  await doc.flush(); // writes embedded fonts into the context
 
   const bytes = writeUpdate(orig, doc, before);
   return identity ? finalize(bytes, identity, now, orig.length) : bytes;

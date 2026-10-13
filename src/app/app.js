@@ -5,6 +5,7 @@ import { createIdentity, fingerprint } from "../core/identity.js";
 import { signPdf } from "../core/pdfsign.js";
 import { appendSigned } from "../core/incremental.js";
 import { exportP12, importP12, lockKey, P12Error } from "../core/p12.js";
+import { addRequestFields, findOpenFields } from "../core/request.js";
 import { PDFDocument } from "pdf-lib";
 import { SignaturePad } from "./pad.js";
 import * as store from "./storage.js";
@@ -48,6 +49,7 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 function signedName(name) {
+  if (/-signed\.[^.]+$/.test(name)) return name;
   const i = name.lastIndexOf(".");
   return i > 0 ? `${name.slice(0, i)}-signed${name.slice(i)}` : `${name}-signed`;
 }
@@ -104,12 +106,14 @@ async function openFile(file) {
       try {
         const doc = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true });
         state.file.signed = hasExistingSignatures(doc);
+        state.fields = findOpenFields(doc);
       } catch { state.file.signed = false; }
-      if (state.file.signed) toast("This PDF is already signed. Your signature will be added as a new revision, leaving earlier signatures valid.");
+      if (!state.fields.length && state.file.signed) toast("This PDF is already signed. Your signature will be added as a new revision, leaving earlier signatures valid.");
     } else await openImage(file);
     $("fileName").textContent = file.name;
     $("dropzone").hidden = true; $("pages").hidden = false;
     fitWidth();
+    renderFields();
   } catch (err) {
     console.error(err);
     resetDoc();
@@ -122,6 +126,8 @@ function resetDoc() {
   state.pdf?.destroy(); state.pdf = null;
   state.pages.forEach((p) => p.url && URL.revokeObjectURL(p.url));
   state.pages = []; state.placements = []; state.selected = null; state.file = null;
+  state.requests = []; state.fields = [];
+  renderReqList(); renderTodo();
   $("pages").innerHTML = ""; $("pages").hidden = true; $("dropzone").hidden = false;
   $("fileName").textContent = "No file open";
   setPlacing(false);
@@ -225,18 +231,24 @@ async function renderPage(p) {
 window.addEventListener("resize", () => { if (state.file) { const z = state.zoom; fitWidth(); state.zoom = z; layoutPages(); } });
 
 /* ---------- placing and editing signatures ---------- */
-function setPlacing(on) {
-  state.placing = on && !!state.sig && !!state.file;
-  viewer.classList.toggle("placing", state.placing);
-  $("placeBtn").classList.toggle("active", state.placing);
-  $("placeBtn").textContent = state.placing ? "Click on a page…" : "Place on page";
+// state.placing: null, { kind: "sig" } or { kind: "req", label }
+function setPlacing(on, kind = "sig", label = "") {
+  const ok = on && !!state.file && (kind === "sig" ? !!state.sig : state.file.type === "pdf");
+  state.placing = ok ? { kind, label } : null;
+  viewer.classList.toggle("placing", !!state.placing);
+  const sigMode = state.placing?.kind === "sig", reqMode = state.placing?.kind === "req";
+  $("placeBtn").classList.toggle("active", sigMode);
+  $("placeBtn").textContent = sigMode ? "Click on a page…" : "Place on page";
+  $("reqAdd").classList.toggle("active", reqMode);
+  $("reqAdd").textContent = reqMode ? "Click on a page…" : 'Add "Sign here" box';
 }
-$("placeBtn").addEventListener("click", () => setPlacing(!state.placing));
+$("placeBtn").addEventListener("click", () => setPlacing(state.placing?.kind !== "sig"));
 
 function aspectOn(p) { return (state.sig.height / state.sig.width) * (p.w / p.h); } // fh = fw * this
 
 function onPagePointer(e, p) {
-  if (!state.placing || e.target.closest(".placed")) return;
+  if (!state.placing || e.target.closest(".placed, .reqbox, .fieldbox")) return;
+  if (state.placing.kind === "req") return placeRequest(e, p, state.placing.label);
   const r = p.el.getBoundingClientRect();
   const defaultW = state.file.type === "pdf" ? 150 : p.w * 0.25; // ~5.3 cm on a PDF page
   const fw = Math.min(0.9, defaultW / p.w);
@@ -258,6 +270,7 @@ function addPlacedEl(pl) {
   const el = document.createElement("div");
   el.className = "placed"; el.dataset.id = pl.id; el.tabIndex = 0;
   el.innerHTML = `${sigSvg(state.sig)}<span class="grip" title="Resize"></span><button type="button" class="del" title="Remove" aria-label="Remove signature">×</button>`;
+  if (pl.field) el.classList.add("fixed");
   p.el.appendChild(el);
   positionPlaced(pl);
 
@@ -266,6 +279,7 @@ function addPlacedEl(pl) {
     if (e.target.closest(".del")) return;
     e.preventDefault(); e.stopPropagation();
     select(pl.id);
+    if (pl.field) return; // sits in a requested box; remove it to sign again
     const resizing = !!e.target.closest(".grip");
     const pr = p.el.getBoundingClientRect();
     const start = { x: e.clientX, y: e.clientY, fx: pl.fx, fy: pl.fy, fw: pl.fw };
@@ -304,7 +318,8 @@ function updatePlacedArt() {
     if (!el || !state.sig) continue;
     el.querySelector("svg").outerHTML = sigSvg(state.sig);
     const p = state.pages[pl.page];
-    pl.fw = Math.min(pl.fw, 1 - pl.fx, (1 - pl.fy) / aspectOn(p));
+    if (pl.field) Object.assign(pl, fitInBox(p, pl.fieldBox));
+    else pl.fw = Math.min(pl.fw, 1 - pl.fx, (1 - pl.fy) / aspectOn(p));
     positionPlaced(pl);
   }
 }
@@ -314,17 +329,179 @@ function select(id) {
   document.querySelectorAll(".placed").forEach((el) => el.classList.toggle("sel", el.dataset.id === id));
 }
 function removePlacement(id) {
+  const pl = state.placements.find((p) => p.id === id);
   state.placements = state.placements.filter((p) => p.id !== id);
   document.querySelector(`.placed[data-id="${id}"]`)?.remove();
+  if (pl?.field) { document.querySelector(`.fieldbox[data-name="${CSS.escape(pl.field)}"]`)?.classList.remove("filled"); renderTodo(); }
   if (state.selected === id) state.selected = null;
   syncUi();
 }
 $("clearPlaced").addEventListener("click", () => [...state.placements].forEach((p) => removePlacement(p.id)));
-document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".placed")) select(null); });
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".placed, .reqbox")) select(null); });
 document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]") || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
-  if ((e.key === "Delete" || e.key === "Backspace") && state.selected) { e.preventDefault(); removePlacement(state.selected); }
+  if ((e.key === "Delete" || e.key === "Backspace") && state.selected) {
+    e.preventDefault();
+    if (state.requests.some((r) => r.id === state.selected)) removeRequest(state.selected); else removePlacement(state.selected);
+  }
   if (e.key === "Escape" && state.placing) setPlacing(false);
+});
+
+/* ---------- requesting signatures (sender) ---------- */
+state.requests = []; state.fields = [];
+$("reqName").addEventListener("input", syncUi);
+$("reqForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const label = $("reqName").value.trim();
+  if (!label) return;
+  if (state.placing?.kind === "req") setPlacing(false); else setPlacing(true, "req", label);
+});
+
+function placeRequest(e, p, label) {
+  const r = p.el.getBoundingClientRect();
+  const fw = Math.min(0.8, 180 / p.w), fh = Math.min(0.3, 50 / p.h); // about 6.4 × 1.8 cm
+  const rq = {
+    id: crypto.randomUUID(), page: +p.el.dataset.index, label, fw, fh,
+    fx: clamp((e.clientX - r.left) / r.width - fw / 2, 0, 1 - fw),
+    fy: clamp((e.clientY - r.top) / r.height - fh / 2, 0, 1 - fh),
+  };
+  state.requests.push(rq);
+  addReqEl(rq);
+  select(rq.id);
+  setPlacing(false);
+  $("reqName").value = "";
+  renderReqList(); syncUi();
+}
+
+function addReqEl(rq) {
+  const p = state.pages[rq.page];
+  const el = document.createElement("div");
+  el.className = "reqbox"; el.dataset.id = rq.id; el.tabIndex = 0;
+  el.innerHTML = `<span></span><span class="grip" title="Resize"></span><button type="button" class="del" title="Remove" aria-label="Remove box">×</button>`;
+  el.firstElementChild.textContent = `Sign here: ${rq.label}`;
+  p.el.appendChild(el);
+  const pos = () => Object.assign(el.style, { left: `${rq.fx * 100}%`, top: `${rq.fy * 100}%`, width: `${rq.fw * 100}%`, height: `${rq.fh * 100}%` });
+  pos();
+  el.querySelector(".del").addEventListener("click", (e) => { e.stopPropagation(); removeRequest(rq.id); });
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".del")) return;
+    e.preventDefault(); e.stopPropagation();
+    select(rq.id);
+    const resizing = !!e.target.closest(".grip");
+    const pr = p.el.getBoundingClientRect();
+    const s = { x: e.clientX, y: e.clientY, fx: rq.fx, fy: rq.fy, fw: rq.fw, fh: rq.fh };
+    el.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const dx = (ev.clientX - s.x) / pr.width, dy = (ev.clientY - s.y) / pr.height;
+      if (resizing) { rq.fw = clamp(s.fw + dx, 0.06, 1 - rq.fx); rq.fh = clamp(s.fh + dy, 0.025, 1 - rq.fy); }
+      else { rq.fx = clamp(s.fx + dx, 0, 1 - rq.fw); rq.fy = clamp(s.fy + dy, 0, 1 - rq.fh); }
+      pos();
+    };
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); };
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+  });
+}
+
+function removeRequest(id) {
+  state.requests = state.requests.filter((r) => r.id !== id);
+  document.querySelector(`.reqbox[data-id="${id}"]`)?.remove();
+  if (state.selected === id) state.selected = null;
+  renderReqList(); syncUi();
+}
+
+function renderReqList() {
+  const ul = $("reqList");
+  ul.innerHTML = "";
+  for (const rq of state.requests) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span></span><button type="button" class="link">Remove</button>`;
+    li.firstChild.textContent = `${rq.label} · page ${rq.page + 1}`;
+    li.querySelector("button").addEventListener("click", () => removeRequest(rq.id));
+    ul.appendChild(li);
+  }
+}
+
+const PUBLIC_URL = "https://mireneye.github.io/ink-sign/";
+function signerList(names) {
+  const u = [...new Set(names)];
+  return u.length < 2 ? u.join("") : `${u.slice(0, -1).join(", ")} and ${u.at(-1)}`;
+}
+function showShare(fileName, names) {
+  const url = location.protocol.startsWith("http") ? location.origin + location.pathname : PUBLIC_URL;
+  $("shWho").textContent = signerList(names);
+  $("shText").value = [
+    "Hi,", "",
+    `Please sign the attached document "${fileName}".`, "",
+    `1. Open ${url}`,
+    "2. Drop the PDF onto the page. It stays on your computer; nothing is uploaded.",
+    '3. Click the yellow "Sign here" box with your name, draw your signature, and click "Download signed".',
+    "4. Send the signed file back to me.", "",
+    "Thanks!",
+  ].join("\n");
+  $("shareDialog").showModal();
+}
+$("shClose").addEventListener("click", () => $("shareDialog").close());
+$("shCopy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("shText").value); $("shCopy").textContent = "Copied"; }
+  catch { $("shText").select(); $("shCopy").textContent = "Selected, press Ctrl+C"; }
+  setTimeout(() => ($("shCopy").textContent = "Copy message"), 1800);
+});
+
+/* ---------- signing a requested box (recipient) ---------- */
+function fitInBox(p, box) {
+  const a = aspectOn(p);
+  const fw = Math.min(box.fw, box.fh / a) * 0.9;
+  return { fw, fx: box.fx + (box.fw - fw) / 2, fy: box.fy + (box.fh - fw * a) / 2 };
+}
+
+function renderFields() {
+  for (const f of state.fields) {
+    const p = state.pages[f.page];
+    if (!p) continue;
+    const el = document.createElement("div");
+    el.className = "fieldbox"; el.dataset.name = f.name;
+    Object.assign(el.style, { left: `${f.fx * 100}%`, top: `${f.fy * 100}%`, width: `${f.fw * 100}%`, height: `${f.fh * 100}%` });
+    el.innerHTML = `<button type="button"></button>`;
+    el.firstChild.textContent = `Sign here · ${f.label}`;
+    el.firstChild.addEventListener("click", (e) => { e.stopPropagation(); signField(f); });
+    p.el.appendChild(el);
+  }
+  renderTodo();
+}
+
+async function signField(f) {
+  if (!state.sig) {
+    const result = await pad.open(null);
+    if (!result) return;
+    await store.setSignature(result);
+    setSignature(result);
+  }
+  const p = state.pages[f.page];
+  const pl = { id: crypto.randomUUID(), page: f.page, ...fitInBox(p, f), field: f.name, fieldBox: { fx: f.fx, fy: f.fy, fw: f.fw, fh: f.fh } };
+  state.placements.push(pl);
+  addPlacedEl(pl);
+  document.querySelector(`.fieldbox[data-name="${CSS.escape(f.name)}"]`)?.classList.add("filled");
+  renderTodo(); syncUi();
+  if (!state.identity) toast("Signed. Add a digital ID to make the signature tamper-evident, or just download.");
+}
+
+function openFieldsLeft() {
+  const filled = new Set(state.placements.filter((p) => p.field).map((p) => p.field));
+  return state.fields.filter((f) => !filled.has(f.name));
+}
+function renderTodo() {
+  const left = openFieldsLeft();
+  $("todoCard").hidden = !state.fields.length;
+  if (!state.fields.length) return;
+  const names = signerList(left.map((f) => f.label));
+  $("todoText").textContent = left.length
+    ? `${left.length} box${left.length === 1 ? "" : "es"} waiting for a signature (${names}). Click "Sign here" in the box.`
+    : 'All requested boxes are signed. Click "Download signed" and send the file back.';
+  $("todoNext").hidden = !left.length;
+}
+$("todoNext").addEventListener("click", () => {
+  const f = openFieldsLeft()[0];
+  document.querySelector(`.fieldbox[data-name="${CSS.escape(f?.name ?? "")}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
 /* ---------- digital ID ---------- */
@@ -379,7 +556,8 @@ function runBackup(identity) {
     const onSave = async (e) => {
       e.preventDefault();
       const pw = $("bkPw").value;
-      if (pw.length < 8) return err("Use at least 8 characters.");
+      if (pw.length < 10) return err("Use at least 10 characters. A few unrelated words work well, e.g. \"lamp orbit cello mint\".");
+      if (/^(.)\1+$|^(0123|1234|abcd|pass|qwer)/i.test(pw)) return err("That password is too easy to guess. Try a few unrelated words.");
       if (pw !== $("bkPw2").value) return err("The two passwords don't match.");
       $("bkError").hidden = true;
       $("bkSave").disabled = true; $("bkSave").textContent = "Saving…";
@@ -467,19 +645,21 @@ $("downloadBtn").addEventListener("click", async () => {
 
 async function exportPdf() {
   const placements = state.sig ? state.placements : [];
-  if (state.file.signed) {
-    // Already signed: append as a revision so earlier signatures stay valid.
-    const out = await appendSigned(state.file.bytes, placements, state.sig, wantsCrypto() ? state.identity : null, { reason: $("reason").value.trim() });
-    download(new Blob([out], { type: "application/pdf" }), signedName(state.file.name));
-    toast("Saved as a new revision; earlier signatures are untouched");
-    return;
+  const requests = state.requests;
+  const reason = $("reason").value.trim();
+  const name = signedName(state.file.name);
+  let out;
+  if (state.file.signed || placements.some((p) => p.field)) {
+    // Already signed, or signing a requested box: append a revision so everything before stays intact.
+    out = await appendSigned(state.file.bytes, placements, state.sig, wantsCrypto() ? state.identity : null, { reason, requests });
+  } else {
+    const doc = await stampPdf(state.file.bytes, placements, state.sig ?? { path: "", width: 1, height: 1, ink: "black" });
+    await addRequestFields(doc, requests);
+    out = wantsCrypto() ? await signPdf(doc, state.identity, { reason }) : await doc.save();
   }
-  const doc = await stampPdf(state.file.bytes, placements, state.sig ?? { path: "", width: 1, height: 1, ink: "black" });
-  const bytes = wantsCrypto()
-    ? await signPdf(doc, state.identity, { reason: $("reason").value.trim() })
-    : await doc.save();
-  download(new Blob([bytes], { type: "application/pdf" }), signedName(state.file.name));
-  toast(wantsCrypto() ? "Saved with digital signature" : "Saved");
+  download(new Blob([out], { type: "application/pdf" }), name);
+  if (requests.length) showShare(name, requests.map((r) => r.label));
+  else toast(state.file.signed ? "Saved as a new revision; earlier signatures are untouched" : wantsCrypto() ? "Saved with digital signature" : "Saved");
 }
 
 async function exportImage() {
@@ -506,8 +686,11 @@ function syncUi() {
   const n = state.placements.length;
   $("placedRow").hidden = !n;
   $("placedCount").textContent = `${n} signature${n === 1 ? "" : "s"} placed`;
-  $("downloadBtn").disabled = !has || !(n > 0 || wantsCrypto());
+  $("downloadBtn").disabled = !has || !(n > 0 || wantsCrypto() || state.requests.length);
+  $("downloadBtn").textContent = state.requests.length && !n ? "Download for signing" : "Download signed";
   $("placeHint").hidden = n > 0;
+  $("reqCard").hidden = state.file?.type === "image";
+  $("reqAdd").disabled = state.file?.type !== "pdf" || (!$("reqName").value.trim() && state.placing?.kind !== "req");
 }
 
 /* ---------- boot ---------- */

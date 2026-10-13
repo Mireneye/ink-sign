@@ -38,6 +38,10 @@ with sync_playwright() as p:
     page.fill("#idName", "Mireneye Test")
     page.fill("#idEmail", "test@example.com")
     page.click("#idCreate")
+    page.wait_for_selector("#backupDialog[open]", timeout=15000)
+    page.fill("#bkPw", "lamp orbit cello mint"); page.fill("#bkPw2", "lamp orbit cello mint")
+    with page.expect_download(): page.click("#bkSave")
+    page.click("#bkDone")
     page.wait_for_selector("#idSome:not([hidden])", timeout=15000)
 
     # open the PDF and place on page 2 (rotated 90)

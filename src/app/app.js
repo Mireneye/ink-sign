@@ -381,8 +381,10 @@ function addReqEl(rq) {
   const p = state.pages[rq.page];
   const el = document.createElement("div");
   el.className = "reqbox"; el.dataset.id = rq.id; el.tabIndex = 0;
-  el.innerHTML = `<span></span><span class="grip" title="Resize"></span><button type="button" class="del" title="Remove" aria-label="Remove box">×</button>`;
-  el.firstElementChild.textContent = `Sign here: ${rq.label}`;
+  // Faint sample signature, fitted like the real one will be (proportional, centred, 90%).
+  const sample = `<svg class="req-sample" viewBox="0 0 125 42" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><path d="M4 30C14 6 26 4 30 22S38 40 46 24 58 6 64 20s6 18 14 6 12-20 20-8 6 16 16 4 8-10 7-6" fill="none" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+  el.innerHTML = `${sample}<span></span><span class="grip" title="Resize"></span><button type="button" class="del" title="Remove" aria-label="Remove box">×</button>`;
+  el.querySelector("span").textContent = `Sign here: ${rq.label}`;
   p.el.appendChild(el);
   const pos = () => Object.assign(el.style, { left: `${rq.fx * 100}%`, top: `${rq.fy * 100}%`, width: `${rq.fw * 100}%`, height: `${rq.fh * 100}%` });
   pos();

@@ -70,7 +70,9 @@ button.active { background: var(--accent-soft); border-color: var(--accent); col
 .placed.sel .grip, .placed.sel .del, .placed:hover .grip, .placed:hover .del { display: block; }
 
 .reqbox { position: absolute; touch-action: none; cursor: move; background: rgba(255, 220, 110, 0.32); border: 1.5px dashed #c98a12; border-radius: 3px; display: flex; align-items: flex-end; padding: 3px 6px; }
-.reqbox span { font-size: 11px; color: #6e4b06; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.req-sample { position: absolute; left: 5%; top: 5%; width: 90%; height: 90%; pointer-events: none; }
+.req-sample path { stroke: #c98a12; opacity: 0.45; }
+.reqbox span { position: relative; font-size: 11px; color: #6e4b06; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .reqbox.sel { border-style: solid; }
 .reqbox .grip, .reqbox .del { position: absolute; display: none; }
 .reqbox .grip { right: -6px; bottom: -6px; width: 12px; height: 12px; background: #c98a12; border: 2px solid #fff; border-radius: 50%; cursor: nwse-resize; }
